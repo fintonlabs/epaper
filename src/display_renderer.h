@@ -20,7 +20,7 @@ extern GxEPD2_BW<GxEPD2_420_GDEY042T81, GxEPD2_420_GDEY042T81::HEIGHT> display;
 static unsigned long lastUpdateMillis = 0;
 static char lastUpdateType[32] = "none";
 static int partialRefreshCount = 0;
-#define FULL_REFRESH_INTERVAL 20  // Do a full refresh every N updates to clear ghosting
+#define FULL_REFRESH_INTERVAL 300  // Full refresh every ~5 min at 1/sec to clear ghosting
 
 // Use partial refresh for content updates (no flicker).
 // Every FULL_REFRESH_INTERVAL updates, do a full refresh to clear ghosting.
@@ -473,6 +473,159 @@ void renderCountdown(const char* title, long secondsRemaining) {
     } while (display.nextPage());
 
     setLastUpdate("countdown");
+}
+
+// ---- CLOCK RENDERING ----
+struct ClockZone {
+    char label[32];
+    int offsetMinutes;  // UTC offset in minutes
+};
+
+void renderClock(ClockZone* zones, int zoneCount, bool hour24) {
+    time_t now = time(nullptr);
+
+    setDisplayWindow();
+    display.firstPage();
+    do {
+        display.fillScreen(GxEPD_WHITE);
+
+        if (zoneCount <= 0 || now < 100000) {
+            // No NTP time yet
+            display.setFont(&FreeSansBold18pt7b);
+            display.setTextColor(GxEPD_BLACK);
+            display.setCursor(60, 160);
+            display.print("Waiting for NTP...");
+            display.nextPage();
+            return;
+        }
+
+        // Primary timezone - large display
+        time_t localTime = now + (long)zones[0].offsetMinutes * 60L;
+        struct tm* t = gmtime(&localTime);
+
+        // Header bar with label
+        display.fillRect(0, 0, DISP_W, 42, GxEPD_BLACK);
+        display.setFont(&FreeSansBold12pt7b);
+        display.setTextColor(GxEPD_WHITE);
+        display.setCursor(12, 30);
+        display.print(zones[0].label);
+
+        // Clock icon in header
+        const uint8_t* clockIcon = getIcon("clock");
+        if (clockIcon) {
+            for (int iy = 0; iy < 32; iy++) {
+                for (int ix = 0; ix < 32; ix++) {
+                    int byteIdx = iy * 4 + (ix / 8);
+                    int bitIdx = 7 - (ix % 8);
+                    if (pgm_read_byte(&clockIcon[byteIdx]) & (1 << bitIdx)) {
+                        display.drawPixel(360 + ix, 5 + iy, GxEPD_WHITE);
+                    }
+                }
+            }
+        }
+
+        display.setTextColor(GxEPD_BLACK);
+
+        // Big time
+        char timeBuf[16];
+        if (hour24) {
+            snprintf(timeBuf, sizeof(timeBuf), "%02d:%02d:%02d", t->tm_hour, t->tm_min, t->tm_sec);
+        } else {
+            int h = t->tm_hour % 12;
+            if (h == 0) h = 12;
+            snprintf(timeBuf, sizeof(timeBuf), "%d:%02d:%02d", h, t->tm_min, t->tm_sec);
+        }
+
+        display.setFont(&FreeSansBold24pt7b);
+        int16_t tbx, tby; uint16_t tbw, tbh;
+        display.getTextBounds(timeBuf, 0, 0, &tbx, &tby, &tbw, &tbh);
+
+        int primaryY = (zoneCount == 1) ? 160 : 110;
+        display.setCursor((DISP_W - tbw) / 2 - tbx, primaryY);
+        display.print(timeBuf);
+
+        // AM/PM for 12-hour mode
+        if (!hour24) {
+            display.setFont(&FreeSansBold12pt7b);
+            display.setCursor((DISP_W + tbw) / 2 + 8, primaryY);
+            display.print(t->tm_hour >= 12 ? "PM" : "AM");
+        }
+
+        // Date under primary time
+        char dateBuf[32];
+        const char* dayNames[] = {"Sun","Mon","Tue","Wed","Thu","Fri","Sat"};
+        const char* monNames[] = {"Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"};
+        snprintf(dateBuf, sizeof(dateBuf), "%s %d %s %d",
+            dayNames[t->tm_wday], t->tm_mday, monNames[t->tm_mon], t->tm_year + 1900);
+        display.setFont(&FreeSansBold9pt7b);
+        display.getTextBounds(dateBuf, 0, 0, &tbx, &tby, &tbw, &tbh);
+        int dateY = (zoneCount == 1) ? 190 : 140;
+        display.setCursor((DISP_W - tbw) / 2 - tbx, dateY);
+        display.print(dateBuf);
+
+        // Additional timezones
+        if (zoneCount > 1) {
+            display.drawFastHLine(20, 160, 360, GxEPD_BLACK);
+
+            int slotCount = zoneCount - 1;
+            if (slotCount > 3) slotCount = 3;
+            int slotW = DISP_W / slotCount;
+
+            for (int i = 0; i < slotCount; i++) {
+                int zi = i + 1;
+                time_t zt = now + (long)zones[zi].offsetMinutes * 60L;
+                struct tm* tz = gmtime(&zt);
+
+                int cx = i * slotW + slotW / 2;
+
+                // Zone label
+                display.setFont(&FreeSansBold9pt7b);
+                display.getTextBounds(zones[zi].label, 0, 0, &tbx, &tby, &tbw, &tbh);
+                display.setCursor(cx - tbw / 2 - tbx, 185);
+                display.print(zones[zi].label);
+
+                // Zone time
+                char ztBuf[16];
+                if (hour24) {
+                    snprintf(ztBuf, sizeof(ztBuf), "%02d:%02d:%02d", tz->tm_hour, tz->tm_min, tz->tm_sec);
+                } else {
+                    int zh = tz->tm_hour % 12;
+                    if (zh == 0) zh = 12;
+                    snprintf(ztBuf, sizeof(ztBuf), "%d:%02d %s", zh, tz->tm_min, tz->tm_hour >= 12 ? "PM" : "AM");
+                }
+                display.setFont(&FreeSansBold18pt7b);
+                display.getTextBounds(ztBuf, 0, 0, &tbx, &tby, &tbw, &tbh);
+                display.setCursor(cx - tbw / 2 - tbx, 230);
+                display.print(ztBuf);
+
+                // Zone date (short)
+                char zdBuf[16];
+                snprintf(zdBuf, sizeof(zdBuf), "%s %d", dayNames[tz->tm_wday], tz->tm_mday);
+                display.setFont(&FreeMono9pt7b);
+                display.getTextBounds(zdBuf, 0, 0, &tbx, &tby, &tbw, &tbh);
+                display.setCursor(cx - tbw / 2 - tbx, 260);
+                display.print(zdBuf);
+
+                // Vertical dividers between zones
+                if (i < slotCount - 1) {
+                    display.drawFastVLine((i + 1) * slotW, 165, 110, GxEPD_BLACK);
+                }
+            }
+        }
+
+        // Footer line
+        int footerY = (zoneCount == 1) ? 260 : 275;
+        display.drawFastHLine(20, footerY, 360, GxEPD_BLACK);
+        display.setFont(&FreeMono9pt7b);
+        char utcBuf[24];
+        struct tm* utc = gmtime(&now);
+        snprintf(utcBuf, sizeof(utcBuf), "UTC %02d:%02d:%02d", utc->tm_hour, utc->tm_min, utc->tm_sec);
+        display.setCursor(20, footerY + 20);
+        display.print(utcBuf);
+
+    } while (display.nextPage());
+
+    setLastUpdate("clock");
 }
 
 // ---- CLEAR DISPLAY ----

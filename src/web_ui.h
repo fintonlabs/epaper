@@ -144,6 +144,7 @@ body{background:var(--bg);color:var(--text);font-family:'Segoe UI',system-ui,san
     <div class="tab" data-tab="qrcode">QR Code</div>
     <div class="tab" data-tab="weather">Weather</div>
     <div class="tab" data-tab="countdown">Countdown</div>
+    <div class="tab" data-tab="clock">Clock</div>
     <div class="tab" data-tab="image">Image</div>
     <div class="tab" data-tab="system">System</div>
   </div>
@@ -270,6 +271,47 @@ body{background:var(--bg);color:var(--text);font-family:'Segoe UI',system-ui,san
     </div>
     <button class="curl-toggle" onclick="toggleCurl('countdown')">&#9654; curl command</button>
     <div class="curl-box" id="curl-countdown"></div>
+  </div>
+
+  <!-- CLOCK -->
+  <div class="panel" id="panel-clock">
+    <div class="form-group"><label>Time Format</label>
+      <select id="clk-format"><option value="24">24-hour</option><option value="12">12-hour</option></select>
+    </div>
+    <div id="tz-list">
+      <div class="form-group"><label>Primary Timezone</label>
+        <div class="form-row">
+          <input type="text" class="tz-label" value="London" placeholder="City name">
+          <select class="tz-offset">
+            <option value="-720">UTC-12</option><option value="-660">UTC-11</option>
+            <option value="-600">UTC-10 (Hawaii)</option><option value="-540">UTC-9 (Alaska)</option>
+            <option value="-480">UTC-8 (PST)</option><option value="-420">UTC-7 (MST)</option>
+            <option value="-360">UTC-6 (CST)</option><option value="-300">UTC-5 (EST)</option>
+            <option value="-240">UTC-4 (AST)</option><option value="-180">UTC-3 (BRT)</option>
+            <option value="-120">UTC-2</option><option value="-60">UTC-1</option>
+            <option value="0" selected>UTC+0 (GMT)</option>
+            <option value="60">UTC+1 (CET)</option><option value="120">UTC+2 (EET)</option>
+            <option value="180">UTC+3 (MSK)</option><option value="210">UTC+3:30 (Tehran)</option>
+            <option value="240">UTC+4 (Dubai)</option><option value="270">UTC+4:30 (Kabul)</option>
+            <option value="300">UTC+5 (PKT)</option><option value="330">UTC+5:30 (IST)</option>
+            <option value="345">UTC+5:45 (Nepal)</option><option value="360">UTC+6 (BST)</option>
+            <option value="420">UTC+7 (ICT)</option><option value="480">UTC+8 (CST/SGT)</option>
+            <option value="540">UTC+9 (JST/KST)</option><option value="570">UTC+9:30 (ACST)</option>
+            <option value="600">UTC+10 (AEST)</option><option value="660">UTC+11</option>
+            <option value="720">UTC+12 (NZST)</option><option value="780">UTC+13</option>
+          </select>
+        </div>
+      </div>
+    </div>
+    <div style="display:flex;gap:8px;margin-bottom:14px">
+      <button class="btn btn-secondary" onclick="addTimezone()" style="padding:6px 14px;font-size:12px">+ Add Timezone</button>
+      <span style="font-size:12px;color:#888;align-self:center">(up to 4 total)</span>
+    </div>
+    <div class="actions">
+      <button class="btn" id="btn-clock" onclick="sendClock()">Start Clock</button>
+    </div>
+    <button class="curl-toggle" onclick="toggleCurl('clock')">&#9654; curl command</button>
+    <div class="curl-box" id="curl-clock"></div>
   </div>
 
   <!-- IMAGE -->
@@ -573,6 +615,60 @@ async function sendCountdown() {
     if (r.ok) addHistory('countdown');
   } catch(e) { toast('Connection error', 'error'); }
   btnLoading('countdown', false);
+}
+
+function addTimezone() {
+  const list = document.getElementById('tz-list');
+  if (list.querySelectorAll('.form-group').length >= 4) { toast('Maximum 4 timezones', 'error'); return; }
+  const n = list.querySelectorAll('.form-group').length + 1;
+  const div = document.createElement('div');
+  div.className = 'form-group';
+  div.innerHTML = '<label>Timezone ' + n + ' <span style="cursor:pointer;color:#f87171;float:right" onclick="this.parentElement.parentElement.remove()">&times; remove</span></label>' +
+    '<div class="form-row"><input type="text" class="tz-label" placeholder="City name">' +
+    '<select class="tz-offset">' +
+    '<option value="-720">UTC-12</option><option value="-660">UTC-11</option>' +
+    '<option value="-600">UTC-10 (Hawaii)</option><option value="-540">UTC-9 (Alaska)</option>' +
+    '<option value="-480">UTC-8 (PST)</option><option value="-420">UTC-7 (MST)</option>' +
+    '<option value="-360">UTC-6 (CST)</option><option value="-300">UTC-5 (EST)</option>' +
+    '<option value="-240">UTC-4 (AST)</option><option value="-180">UTC-3 (BRT)</option>' +
+    '<option value="-120">UTC-2</option><option value="-60">UTC-1</option>' +
+    '<option value="0" selected>UTC+0 (GMT)</option>' +
+    '<option value="60">UTC+1 (CET)</option><option value="120">UTC+2 (EET)</option>' +
+    '<option value="180">UTC+3 (MSK)</option><option value="210">UTC+3:30 (Tehran)</option>' +
+    '<option value="240">UTC+4 (Dubai)</option><option value="270">UTC+4:30 (Kabul)</option>' +
+    '<option value="300">UTC+5 (PKT)</option><option value="330">UTC+5:30 (IST)</option>' +
+    '<option value="345">UTC+5:45 (Nepal)</option><option value="360">UTC+6 (BST)</option>' +
+    '<option value="420">UTC+7 (ICT)</option><option value="480">UTC+8 (CST/SGT)</option>' +
+    '<option value="540">UTC+9 (JST/KST)</option><option value="570">UTC+9:30 (ACST)</option>' +
+    '<option value="600">UTC+10 (AEST)</option><option value="660">UTC+11</option>' +
+    '<option value="720">UTC+12 (NZST)</option><option value="780">UTC+13</option>' +
+    '</select></div>';
+  list.appendChild(div);
+}
+
+function getClockData() {
+  const timezones = [];
+  document.querySelectorAll('#tz-list .form-group').forEach(g => {
+    const label = g.querySelector('.tz-label').value || 'UTC';
+    const offset = parseInt(g.querySelector('.tz-offset').value);
+    timezones.push({label, offset});
+  });
+  return {
+    hour24: document.getElementById('clk-format').value === '24',
+    timezones
+  };
+}
+
+async function sendClock() {
+  const data = getClockData();
+  showCurl('clock', '/api/clock', data);
+  btnLoading('clock', true);
+  try {
+    const r = await apiPost('/api/clock', data);
+    toast(r.ok ? 'Clock started' : (r.error || 'Failed'), r.ok ? 'success' : 'error');
+    if (r.ok) addHistory('clock');
+  } catch(e) { toast('Connection error', 'error'); }
+  btnLoading('clock', false);
 }
 
 async function sendImage() {

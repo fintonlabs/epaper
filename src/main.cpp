@@ -40,6 +40,13 @@ static unsigned long countdownTargetMillis = 0;
 static char countdownTitle[64] = "";
 static unsigned long lastCountdownUpdate = 0;
 
+// ---- Clock state ----
+static bool clockActive = false;
+static ClockZone clockZones[4];
+static int clockZoneCount = 0;
+static bool clockHour24 = true;
+static unsigned long lastClockUpdate = 0;
+
 // ---- Config ----
 static int displayRotation = 0;
 static unsigned long sleepAfterSec = 0;
@@ -194,6 +201,7 @@ void setupRoutes() {
 
             Serial.printf("Text: '%s' size=%d align=%s\n", txtBuf, size, alignBuf);
             countdownActive = false;
+            clockActive = false;
             renderText(txtBuf, size, x, y, alignBuf);
             request->send(200, "application/json", "{\"ok\":true}");
         }
@@ -216,6 +224,7 @@ void setupRoutes() {
 
             Serial.printf("Notification: title='%s' icon=%s style=%s\n", nTitle, nIcon, nStyle);
             countdownActive = false;
+            clockActive = false;
             renderNotification(nTitle, nBody, nIcon, nStyle);
             request->send(200, "application/json", "{\"ok\":true}");
         }
@@ -237,6 +246,7 @@ void setupRoutes() {
             }
 
             countdownActive = false;
+            clockActive = false;
             renderDashboard(widgets);
             request->send(200, "application/json", "{\"ok\":true}");
         }
@@ -258,6 +268,7 @@ void setupRoutes() {
 
             Serial.printf("Emoji: %s size=%s caption='%s'\n", eName, eSize, eCap);
             countdownActive = false;
+            clockActive = false;
             renderEmoji(eName, eSize, eCap);
             request->send(200, "application/json", "{\"ok\":true}");
         }
@@ -300,6 +311,7 @@ void setupRoutes() {
 
             Serial.printf("Weather: %s %s %s%% @ %s\n", wTemp, wCond, wHum, wLoc);
             countdownActive = false;
+            clockActive = false;
             renderWeather(wTemp, wCond, wHum, wLoc);
             request->send(200, "application/json", "{\"ok\":true}");
         }
@@ -363,6 +375,7 @@ void setupRoutes() {
         NULL,
         [](AsyncWebServerRequest* request, uint8_t* data, size_t len, size_t index, size_t total) {
             countdownActive = false;
+            clockActive = false;
             renderClear();
             request->send(200, "application/json", "{\"ok\":true}");
         }
@@ -370,9 +383,51 @@ void setupRoutes() {
 
     server.on("/api/clear", HTTP_POST, [](AsyncWebServerRequest* request) {
         countdownActive = false;
+        clockActive = false;
         renderClear();
         request->send(200, "application/json", "{\"ok\":true}");
     });
+
+    // Clock / World Clock
+    server.on("/api/clock", HTTP_POST, [](AsyncWebServerRequest* request) {},
+        NULL,
+        [](AsyncWebServerRequest* request, uint8_t* data, size_t len, size_t index, size_t total) {
+
+            JsonDocument* doc = parseBody(request, data, len);
+            if (!doc) {
+                request->send(400, "application/json", "{\"ok\":false,\"error\":\"Invalid JSON\"}");
+                return;
+            }
+
+            clockHour24 = (*doc)["hour24"] | true;
+            JsonArray zones = (*doc)["timezones"].as<JsonArray>();
+            clockZoneCount = 0;
+
+            if (zones.isNull() || zones.size() == 0) {
+                // Default: single UTC clock
+                strncpy(clockZones[0].label, "UTC", sizeof(clockZones[0].label));
+                clockZones[0].offsetMinutes = 0;
+                clockZoneCount = 1;
+            } else {
+                for (JsonObject z : zones) {
+                    if (clockZoneCount >= 4) break;
+                    strncpy(clockZones[clockZoneCount].label,
+                            z["label"] | "UTC",
+                            sizeof(clockZones[clockZoneCount].label) - 1);
+                    clockZones[clockZoneCount].label[sizeof(clockZones[0].label) - 1] = '\0';
+                    clockZones[clockZoneCount].offsetMinutes = z["offset"] | 0;
+                    clockZoneCount++;
+                }
+            }
+
+            countdownActive = false;
+            clockActive = true;
+            lastClockUpdate = 0;  // Force immediate render
+
+            Serial.printf("Clock: %d zones, 24h=%d\n", clockZoneCount, clockHour24);
+            request->send(200, "application/json", "{\"ok\":true}");
+        }
+    );
 
     // Image upload
     static uint8_t* imgBuf = nullptr;
@@ -414,6 +469,7 @@ void setupRoutes() {
                     }
 
                     countdownActive = false;
+                    clockActive = false;
                     renderImageFromBuffer(gray, bmpW, bmpH);
                     free(gray);
                     request->send(200, "application/json", "{\"ok\":true}");
@@ -587,6 +643,15 @@ void loop() {
             if (remaining <= 0) {
                 countdownActive = false;
             }
+        }
+    }
+
+    // Clock update (only in station mode)
+    if (clockActive && wifiGetState() == WIFI_STATE_CONNECTED) {
+        unsigned long now = millis();
+        if (now - lastClockUpdate >= 1000 || lastClockUpdate == 0) {
+            lastClockUpdate = now;
+            renderClock(clockZones, clockZoneCount, clockHour24);
         }
     }
 

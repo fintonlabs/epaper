@@ -68,7 +68,8 @@ Open the device IP or `http://epaper.local` in a browser. The UI has tabs for:
 | **Emoji** | Display pixel art icons fullscreen or normal size with captions |
 | **QR Code** | Generate and display QR codes with optional caption |
 | **Weather** | Weather display with temperature, condition, humidity, location |
-| **Countdown** | Countdown timer to a target date/time |
+| **Countdown** | Countdown timer to a target date/time (updates every second) |
+| **Clock** | Live clock / world clock with up to 4 timezones |
 | **Image** | Upload and display BMP images (24-bit or 1-bit) |
 | **System** | Device info, display rotation, WiFi reset |
 
@@ -115,6 +116,16 @@ curl -X POST http://epaper.local/api/weather \
 curl -X POST http://epaper.local/api/countdown \
   -H 'Content-Type: application/json' \
   -d '{"title":"Deploy","target":"2026-12-31T00:00:00"}'
+
+# Clock (single timezone)
+curl -X POST http://epaper.local/api/clock \
+  -H 'Content-Type: application/json' \
+  -d '{"hour24":true,"timezones":[{"label":"London","offset":0}]}'
+
+# World Clock (multiple timezones, offset in minutes from UTC)
+curl -X POST http://epaper.local/api/clock \
+  -H 'Content-Type: application/json' \
+  -d '{"hour24":false,"timezones":[{"label":"London","offset":0},{"label":"New York","offset":-300},{"label":"Tokyo","offset":540}]}'
 
 # Image (BMP upload)
 curl -X POST http://epaper.local/api/image \

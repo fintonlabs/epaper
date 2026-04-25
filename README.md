@@ -8,7 +8,23 @@ WiFi-connected e-paper display controller for ESP32-S3 with a 4.2" B/W e-paper p
 |-----------|--------|
 | MCU | ESP32-S3 DevKitC-1 |
 | Display | 4.2" B/W e-paper, 400x300, SSD1683 driver (GDEY042T81) |
-| SPI Pins | MOSI=GPIO11, SCK=GPIO12, CS=GPIO10, DC=GPIO9, RST=GPIO8, BUSY=GPIO7 |
+
+### Pin Connections
+
+```
+ESP32-S3          E-Paper Display
+--------          ---------------
+GPIO 11 (MOSI) -> DIN (Data In)
+GPIO 12 (SCK)  -> CLK (Clock)
+GPIO 10 (CS)   -> CS  (Chip Select)
+GPIO  9 (DC)   -> DC  (Data/Command)
+GPIO  8 (RST)  -> RST (Reset)
+GPIO  7 (BUSY) -> BUSY
+3.3V           -> VCC
+GND            -> GND
+```
+
+> **Note:** MISO is not connected -- e-paper is write-only. SPI is initialized with `SPI.begin(SCK, -1, MOSI)`.
 
 ## Features
 

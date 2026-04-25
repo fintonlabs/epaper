@@ -573,7 +573,7 @@ void loop() {
     // Countdown timer update (only in station mode)
     if (countdownActive && wifiGetState() == WIFI_STATE_CONNECTED) {
         unsigned long now = millis();
-        if (now - lastCountdownUpdate >= 60000 || lastCountdownUpdate == 0) {
+        if (now - lastCountdownUpdate >= 1000 || lastCountdownUpdate == 0) {
             lastCountdownUpdate = now;
 
             long remaining = 0;

@@ -20,14 +20,16 @@ extern GxEPD2_BW<GxEPD2_420_GDEY042T81, GxEPD2_420_GDEY042T81::HEIGHT> display;
 static unsigned long lastUpdateMillis = 0;
 static char lastUpdateType[32] = "none";
 static int partialRefreshCount = 0;
+static bool forceNextFullRefresh = false;
 #define FULL_REFRESH_INTERVAL 300  // Full refresh every ~5 min at 1/sec to clear ghosting
 
 // Use partial refresh for content updates (no flicker).
-// Every FULL_REFRESH_INTERVAL updates, do a full refresh to clear ghosting.
+// forceNextFullRefresh triggers a one-shot full refresh on mode switch.
 void setDisplayWindow(bool forceFullRefresh = false) {
-    if (forceFullRefresh || partialRefreshCount >= FULL_REFRESH_INTERVAL) {
+    if (forceFullRefresh || forceNextFullRefresh) {
         display.setFullWindow();
         partialRefreshCount = 0;
+        forceNextFullRefresh = false;
     } else {
         display.setPartialWindow(0, 0, DISP_W, DISP_H);
         partialRefreshCount++;
@@ -481,23 +483,192 @@ struct ClockZone {
     int offsetMinutes;  // UTC offset in minutes
 };
 
-void renderClock(ClockZone* zones, int zoneCount, bool hour24) {
+// ---- BIG CLOCK ----
+// Draws time using thick rectangle segments for maximum size on 400x300 display.
+// Digit cell is ~70px wide x 130px tall. Segment thickness = 14px.
+
+static void drawSegment(int x, int y, int w, int h) {
+    display.fillRect(x, y, w, h, GxEPD_BLACK);
+}
+
+// Draw a single 7-segment digit at (x,y) with given width/height/thickness
+static void drawBigDigit(int x, int y, int w, int h, int t, int digit) {
+    //  _a_
+    // |f |b
+    //  _g_
+    // |e |c
+    //  _d_
+    // Segments: a=top, b=top-right, c=bottom-right, d=bottom, e=bottom-left, f=top-left, g=middle
+    bool segs[10][7] = {
+        // a     b     c     d     e     f     g
+        {true, true, true, true, true, true, false},  // 0
+        {false,true, true, false,false,false,false},   // 1
+        {true, true, false,true, true, false,true},    // 2
+        {true, true, true, true, false,false,true},    // 3
+        {false,true, true, false,false,true, true},    // 4
+        {true, false,true, true, false,true, true},    // 5
+        {true, false,true, true, true, true, true},    // 6
+        {true, true, true, false,false,false,false},   // 7
+        {true, true, true, true, true, true, true},    // 8
+        {true, true, true, true, false,true, true},    // 9
+    };
+    if (digit < 0 || digit > 9) return;
+    bool* s = segs[digit];
+    int halfH = h / 2;
+    if (s[0]) drawSegment(x + t, y, w - 2*t, t);                    // a - top
+    if (s[1]) drawSegment(x + w - t, y + t, t, halfH - t);          // b - top right
+    if (s[2]) drawSegment(x + w - t, y + halfH, t, halfH - t);      // c - bottom right
+    if (s[3]) drawSegment(x + t, y + h - t, w - 2*t, t);            // d - bottom
+    if (s[4]) drawSegment(x, y + halfH, t, halfH - t);              // e - bottom left
+    if (s[5]) drawSegment(x, y + t, t, halfH - t);                  // f - top left
+    if (s[6]) drawSegment(x + t, y + halfH - t/2, w - 2*t, t);     // g - middle
+}
+
+static void drawBigColon(int x, int y, int h, int dotSize) {
+    int quarter = h / 4;
+    display.fillRect(x, y + quarter - dotSize/2, dotSize, dotSize, GxEPD_BLACK);
+    display.fillRect(x, y + 3*quarter - dotSize/2, dotSize, dotSize, GxEPD_BLACK);
+}
+
+void renderBigClock(int offsetMinutes, bool hour24, const char* label) {
     time_t now = time(nullptr);
+
+    if (now < 100000) {
+        setDisplayWindow();
+        display.firstPage();
+        do {
+            display.fillScreen(GxEPD_WHITE);
+            display.setFont(&FreeSansBold12pt7b);
+            display.setTextColor(GxEPD_BLACK);
+            display.setCursor(50, 150);
+            display.print("Waiting for NTP...");
+        } while (display.nextPage());
+        setLastUpdate("bigclock");
+        return;
+    }
+
+    time_t localTime = now + (long)offsetMinutes * 60L;
+    struct tm* t = gmtime(&localTime);
+
+    int hour = t->tm_hour;
+    bool isPM = hour >= 12;
+    if (!hour24) {
+        hour = hour % 12;
+        if (hour == 0) hour = 12;
+    }
 
     setDisplayWindow();
     display.firstPage();
     do {
         display.fillScreen(GxEPD_WHITE);
 
-        if (zoneCount <= 0 || now < 100000) {
-            // No NTP time yet
-            display.setFont(&FreeSansBold18pt7b);
-            display.setTextColor(GxEPD_BLACK);
-            display.setCursor(60, 160);
-            display.print("Waiting for NTP...");
-            display.nextPage();
-            return;
+        // Maximum size: 230px tall digits, edge to edge
+        int digitW = 80;
+        int digitH = 230;
+        int thick = 22;
+        int colonW = 24;
+        int gap = 6;
+        int dotSize = 20;
+
+        // Reserve 30px at bottom for date, 10px top margin
+        int startY = 8;
+
+        // Total width: 4 digits + colon + gaps
+        int totalW = 4 * digitW + colonW + 4 * gap;
+        int startX = (DISP_W - totalW) / 2;
+        int x = startX;
+
+        // Hour tens (suppress leading zero in 12h mode)
+        int h10 = hour / 10;
+        if (!hour24 && h10 == 0) {
+            // skip leading zero
+        } else {
+            drawBigDigit(x, startY, digitW, digitH, thick, h10);
         }
+        x += digitW + gap;
+
+        // Hour ones
+        drawBigDigit(x, startY, digitW, digitH, thick, hour % 10);
+        x += digitW + gap;
+
+        // Colon
+        drawBigColon(x, startY, digitH, dotSize);
+        x += colonW + gap;
+
+        // Minute tens
+        drawBigDigit(x, startY, digitW, digitH, thick, t->tm_min / 10);
+        x += digitW + gap;
+
+        // Minute ones
+        drawBigDigit(x, startY, digitW, digitH, thick, t->tm_min % 10);
+
+        // Thin date line at very bottom
+        display.setTextColor(GxEPD_BLACK);
+        const char* dayNames[] = {"Sun","Mon","Tue","Wed","Thu","Fri","Sat"};
+        const char* monNames[] = {"Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"};
+
+        char dateBuf[64];
+        if (label && label[0]) {
+            snprintf(dateBuf, sizeof(dateBuf), "%s  |  %s %d %s %d",
+                label, dayNames[t->tm_wday], t->tm_mday, monNames[t->tm_mon], t->tm_year + 1900);
+        } else {
+            snprintf(dateBuf, sizeof(dateBuf), "%s %d %s %d",
+                dayNames[t->tm_wday], t->tm_mday, monNames[t->tm_mon], t->tm_year + 1900);
+        }
+
+        display.setFont(&FreeSansBold9pt7b);
+        int16_t tbx, tby; uint16_t tbw, tbh;
+
+        // Date centered
+        display.getTextBounds(dateBuf, 0, 0, &tbx, &tby, &tbw, &tbh);
+        display.setCursor((DISP_W - tbw) / 2 - tbx, DISP_H - 8);
+        display.print(dateBuf);
+
+        // AM/PM right-aligned
+        if (!hour24) {
+            const char* ampm = isPM ? "PM" : "AM";
+            display.setFont(&FreeSansBold12pt7b);
+            display.getTextBounds(ampm, 0, 0, &tbx, &tby, &tbw, &tbh);
+            display.setCursor(DISP_W - tbw - 8, DISP_H - 6);
+            display.print(ampm);
+        }
+
+    } while (display.nextPage());
+    setLastUpdate("bigclock");
+}
+
+void renderClock(ClockZone* zones, int zoneCount, bool hour24) {
+    time_t now = time(nullptr);
+
+    // No NTP time yet - render waiting message properly
+    if (zoneCount <= 0 || now < 100000) {
+        setDisplayWindow();
+        display.firstPage();
+        do {
+            display.fillScreen(GxEPD_WHITE);
+            display.setFont(&FreeSansBold12pt7b);
+            display.setTextColor(GxEPD_BLACK);
+            display.setCursor(50, 130);
+            display.print("Waiting for NTP...");
+
+            // Show WiFi icon
+            const uint8_t* wifiIcon = getIcon("wifi");
+            if (wifiIcon) {
+                drawIcon((DISP_W - 64) / 2, 40, wifiIcon, 2);
+            }
+
+            display.setFont(&FreeSansBold9pt7b);
+            display.setCursor(60, 170);
+            display.print("Syncing time with server...");
+        } while (display.nextPage());
+        setLastUpdate("clock");
+        return;
+    }
+
+    setDisplayWindow();
+    display.firstPage();
+    do {
+        display.fillScreen(GxEPD_WHITE);
 
         // Primary timezone - large display
         time_t localTime = now + (long)zones[0].offsetMinutes * 60L;
@@ -626,6 +797,136 @@ void renderClock(ClockZone* zones, int zoneCount, bool hour24) {
     } while (display.nextPage());
 
     setLastUpdate("clock");
+}
+
+// ---- RSS FEED RENDERING ----
+// rss_fetcher.h must be included before this file
+
+// Word-wrap helper: prints text with word wrapping within maxW, starting at (x, y).
+// Returns the Y position after the last line.
+static int drawWrappedText(const char* text, int x, int y, int maxW, int lineHeight, int maxY = 0) {
+    if (maxY <= 0) maxY = DISP_H - 5;
+
+    // Clean text: strip newlines/carriage returns that cause GFX cursor jumps
+    char cleanBuf[512];
+    int ci = 0;
+    for (int i = 0; text[i] && ci < (int)sizeof(cleanBuf) - 1; i++) {
+        if (text[i] == '\n' || text[i] == '\r') {
+            if (ci > 0 && cleanBuf[ci-1] != ' ') cleanBuf[ci++] = ' ';
+        } else {
+            cleanBuf[ci++] = text[i];
+        }
+    }
+    cleanBuf[ci] = '\0';
+
+    char lineBuf[128];
+    const char* p = cleanBuf;
+    int curY = y;
+
+    while (*p) {
+        // Skip leading spaces
+        while (*p == ' ') p++;
+        if (!*p) break;
+
+        // Stop if next line would exceed maxY
+        if (curY > maxY) break;
+
+        // Try to fit as many words as possible on this line
+        int len = 0;
+        int lastSpace = -1;
+        int16_t tbx, tby; uint16_t tbw, tbh;
+
+        while (p[len] && len < (int)sizeof(lineBuf) - 1) {
+            lineBuf[len] = p[len];
+            lineBuf[len + 1] = '\0';
+            len++;
+
+            if (p[len - 1] == ' ') lastSpace = len - 1;
+
+            display.getTextBounds(lineBuf, 0, 0, &tbx, &tby, &tbw, &tbh);
+            if ((int)tbw > maxW) {
+                if (lastSpace > 0) {
+                    len = lastSpace;
+                } else {
+                    len--;
+                }
+                break;
+            }
+        }
+
+        if (len == 0) break;
+
+        lineBuf[len] = '\0';
+        display.setCursor(x, curY);
+        display.print(lineBuf);
+        curY += lineHeight;
+        p += len;
+    }
+
+    return curY;
+}
+
+void renderRssFeed() {
+    setDisplayWindow();
+    display.firstPage();
+    do {
+        display.fillScreen(GxEPD_WHITE);
+
+        if (rssItemCount == 0) {
+            display.setFont(&FreeSansBold12pt7b);
+            display.setTextColor(GxEPD_BLACK);
+            display.setCursor(80, 150);
+            display.print("No RSS items loaded");
+            continue;
+        }
+
+        int idx = rssDisplayIndex;
+        if (idx >= rssItemCount) idx = 0;
+
+        // Header bar with feed name and counter
+        display.fillRect(0, 0, DISP_W, 32, GxEPD_BLACK);
+        display.setFont(&FreeSansBold9pt7b);
+        display.setTextColor(GxEPD_WHITE);
+        display.setCursor(10, 22);
+        display.print(rssItems[idx].feedName);
+
+        char countStr[16];
+        snprintf(countStr, sizeof(countStr), "%d/%d", idx + 1, rssItemCount);
+        int16_t tbx, tby; uint16_t tbw, tbh;
+        display.getTextBounds(countStr, 0, 0, &tbx, &tby, &tbw, &tbh);
+        display.setCursor(DISP_W - tbw - 10, 22);
+        display.print(countStr);
+
+        display.setTextColor(GxEPD_BLACK);
+
+        // Title - large bold, word-wrapped, flows naturally
+        display.setFont(&FreeSansBold12pt7b);
+        int y = drawWrappedText(rssItems[idx].title, 10, 58, DISP_W - 20, 26);
+
+        // Separator line with spacing
+        y += 8;
+        display.drawFastHLine(10, y, DISP_W - 20, GxEPD_BLACK);
+        y += 16;
+
+        // Description - serif font for newspaper feel, word-wrapped
+        if (rssItems[idx].description[0]) {
+            display.setFont(&FreeSerif9pt7b);
+            drawWrappedText(rssItems[idx].description, 10, y, DISP_W - 20, 17, DISP_H - 10);
+        }
+
+    } while (display.nextPage());
+
+    setLastUpdate("rss");
+}
+
+// ---- INVERT DISPLAY ----
+void renderInverted() {
+    setDisplayWindow(true);
+    display.firstPage();
+    do {
+        display.fillScreen(GxEPD_BLACK);
+    } while (display.nextPage());
+    setLastUpdate("invert");
 }
 
 // ---- CLEAR DISPLAY ----
